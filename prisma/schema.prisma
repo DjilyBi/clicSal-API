@@ -84,15 +84,16 @@ model User {
   updatedAt     DateTime     @updatedAt @map("updated_at")
 
   // Relations
-  ownedGyms     Gym[]         @relation("GymOwner")
-  memberships   Membership[]
-  sessionPasses SessionPass[]
-  accessCodes   AccessCode[]
-  checkIns      CheckIn[]
-  payments      Payment[]
-  productSales  ProductSale[]
-  gymStaff      GymStaff[]
-  sessions      UserSession[]
+  ownedGyms        Gym[]         @relation("GymOwner")
+  memberships      Membership[]
+  sessionPasses    SessionPass[]
+  accessCodes      AccessCode[]
+  checkIns         CheckIn[]     @relation("UserCheckIns")
+  validatedCheckIns CheckIn[]    @relation("StaffValidations")
+  payments         Payment[]
+  productSales     ProductSale[]
+  gymStaff         GymStaff[]
+  sessions         UserSession[]
 
   @@index([phone])
   @@index([email])
@@ -266,9 +267,9 @@ model CheckIn {
 
   // Relations
   gym              Gym        @relation(fields: [gymId], references: [id], onDelete: Cascade)
-  user             User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user             User?      @relation("UserCheckIns", fields: [userId], references: [id], onDelete: SetNull)
   accessCode       AccessCode @relation(fields: [accessCodeId], references: [id], onDelete: Cascade)
-  validatedByStaff User?      @relation(fields: [validatedByStaffId], references: [id], onDelete: SetNull, map: "check_ins_staff_fkey")
+  validatedByStaff User?      @relation("StaffValidations", fields: [validatedByStaffId], references: [id], onDelete: SetNull)
 
   @@index([gymId, scannedAt]) // Dashboard live + rapports
   @@index([userId, scannedAt])
