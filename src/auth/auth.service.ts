@@ -2,7 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionService } from './session.service';
-import { nanoid } from 'nanoid';
+import { SupabaseService } from './supabase.service';
 
 @Injectable()
 export class AuthService {
@@ -10,69 +10,89 @@ export class AuthService {
     private prisma: PrismaService,
     private jwtService: JwtService,
     private sessionService: SessionService,
+    private supabase: SupabaseService,
   ) {}
 
-  // Générer et envoyer Magic Link
-  async sendMagicLink(phone: string) {
-    const token = nanoid(32);
-    const expiresAt = new Date(
-      Date.now() +
-        parseInt(process.env.MAGIC_LINK_EXPIRY_MINUTES || '10', 10) * 60 * 1000,
-    );
-
-    // Créer le Magic Link
-    await this.prisma.magicLink.create({
-      data: {
-        token,
-        phone,
-        expiresAt,
-      },
-    });
-
-    // TODO: Envoyer via WhatsApp (Twilio)
-    const magicLinkUrl = `${process.env.FRONTEND_URL}/auth/verify?token=${token}`;
+  /**
+   * Envoyer un Magic Link via Supabase
+   * Supabase gère l'envoi d'email automatiquement
+   */
+  async sendMagicLink(email: string) {
+    await this.supabase.sendMagicLink(email, `${process.env.FRONTEND_URL}/auth/callback`);
 
     return {
-      message: 'Magic link envoyé',
-      magicLinkUrl, // À retirer en prod (juste pour dev)
+      message: 'Magic link envoyé à votre email',
+      email,
     };
   }
 
-  // Vérifier Magic Link et authentifier
-  async verifyMagicLink(
+  /**
+   * Envoyer un OTP par téléphone via Supabase
+   * Supabase gère l'envoi de SMS automatiquement
+   */
+  async sendPhoneOTP(phone: string) {
+    // Format: +221771234567
+    await this.supabase.sendPhoneOTP(phone);
+
+    return {
+      message: 'Code OTP envoyé par SMS',
+      phone,
+    };
+  }
+
+  /**
+   * Vérifier OTP téléphone et créer session
+   */
+  async verifyPhoneOTP(
+    phone: string,
     token: string,
     deviceId: string = 'web-default',
     userAgent: string = 'unknown',
   ) {
-    const magicLink = await this.prisma.magicLink.findUnique({
-      where: { token },
-    });
+    // Vérifier OTP via Supabase
+    const { user: supabaseUser, session } = await this.supabase.verifyPhoneOTP(phone, token);
 
-    if (!magicLink || magicLink.used || magicLink.expiresAt < new Date()) {
-      throw new UnauthorizedException('Magic link invalide ou expiré');
+    if (!supabaseUser) {
+      throw new UnauthorizedException('OTP invalide ou expiré');
     }
 
-    // Marquer comme utilisé
-    await this.prisma.magicLink.update({
-      where: { id: magicLink.id },
-      data: { used: true, usedAt: new Date() },
-    });
+    // Synchroniser ou créer user dans notre DB
+    const user = await this.syncUserFromSupabase(supabaseUser);
 
-    // Trouver ou créer l'utilisateur
-    let user = await this.prisma.user.findUnique({
-      where: { phone: magicLink.phone },
-    });
+    // Créer une session avec multi-device lock
+    const accessToken = await this.sessionService.createSession(
+      user.id,
+      deviceId,
+      userAgent,
+    );
 
-    if (!user) {
-      user = await this.prisma.user.create({
-        data: {
-          phone: magicLink.phone,
-          isVerified: true,
-        },
-      });
+    return {
+      accessToken,
+      user,
+      supabaseSession: session,
+    };
+  }
+
+  /**
+   * Vérifier un token Supabase et créer/synchroniser user
+   * Utilisé après callback OAuth (Google, Apple, etc.)
+   */
+  async verifySupabaseToken(
+    supabaseAccessToken: string,
+    deviceId: string = 'web-default',
+    userAgent: string = 'unknown',
+  ) {
+    // Vérifier le token avec Supabase
+    const supabaseUser = await this.supabase.verifyToken(supabaseAccessToken);
+
+    if (!supabaseUser) {
+      throw new UnauthorizedException('Token Supabase invalide');
     }
 
-    // Créer une session (invalide les anciens devices)
+    // Synchroniser ou créer user dans notre DB
+    const user = await this.syncUserFromSupabase(supabaseUser);
+
+    // Créer une session avec multi-device lock
     const accessToken = await this.sessionService.createSession(
       user.id,
       deviceId,
@@ -83,5 +103,60 @@ export class AuthService {
       accessToken,
       user,
     };
+  }
+
+  /**
+   * Synchroniser un user Supabase avec notre DB
+   * Crée le user s'il n'existe pas, sinon met à jour
+   */
+  private async syncUserFromSupabase(supabaseUser: any) {
+    let user = await this.prisma.user.findUnique({
+      where: { supabaseId: supabaseUser.id },
+    });
+
+    if (!user) {
+      // Créer nouveau user
+      user = await this.prisma.user.create({
+        data: {
+          supabaseId: supabaseUser.id,
+          email: supabaseUser.email,
+          phone: supabaseUser.phone,
+          firstName: supabaseUser.user_metadata?.first_name,
+          lastName: supabaseUser.user_metadata?.last_name,
+          photoUrl: supabaseUser.user_metadata?.avatar_url,
+          isVerified: supabaseUser.email_confirmed_at !== null,
+          authProvider: 'supabase',
+        },
+      });
+    } else {
+      // Mettre à jour les infos si nécessaire
+      user = await this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          email: supabaseUser.email || user.email,
+          phone: supabaseUser.phone || user.phone,
+          firstName: supabaseUser.user_metadata?.first_name || user.firstName,
+          lastName: supabaseUser.user_metadata?.last_name || user.lastName,
+          photoUrl: supabaseUser.user_metadata?.avatar_url || user.photoUrl,
+          isVerified: supabaseUser.email_confirmed_at !== null,
+        },
+      });
+    }
+
+    return user;
+  }
+
+  /**
+   * Logout - Invalider la session
+   */
+  async logout(userId: string, deviceId: string) {
+    await this.prisma.userSession.deleteMany({
+      where: {
+        userId,
+        deviceId,
+      },
+    });
+
+    return { message: 'Déconnecté avec succès' };
   }
 }
