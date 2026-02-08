@@ -1,0 +1,353 @@
+// ClicSal - Prisma Schema
+// Généré le 8 février 2026
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ========================================
+// ENUMS
+// ========================================
+
+enum UserRole {
+  member      // Client de la salle
+  staff       // Employé (scan QR, vente)
+  owner       // Gérant de salle
+  super_admin // Support ClicSal
+}
+
+enum MembershipType {
+  daily
+  weekly
+  monthly
+  quarterly
+  yearly
+}
+
+enum MembershipStatus {
+  active
+  expired
+  suspended
+  cancelled
+}
+
+enum PaymentMethod {
+  wave
+  orange_money
+  cash
+  credit_card
+}
+
+enum PaymentStatus {
+  pending
+  paid
+  failed
+  refunded
+}
+
+enum PaymentType {
+  membership
+  session_pass
+  product
+}
+
+enum CheckInType {
+  entry
+  exit
+}
+
+enum AuthProvider {
+  firebase_phone
+  google
+  apple
+  email
+  magic_link
+}
+
+// ========================================
+// TABLES UTILISATEURS & AUTHENTIFICATION
+// ========================================
+
+model User {
+  id            String       @id @default(uuid())
+  firstName     String?      @map("first_name")
+  lastName      String?      @map("last_name")
+  email         String?      @unique
+  phone         String       @unique // Format: +221771234567
+  photoUrl      String?      @map("photo_url")
+  role          UserRole     @default(member)
+  authProvider  AuthProvider @default(magic_link) @map("auth_provider")
+  firebaseUid   String?      @unique @map("firebase_uid") // Firebase Auth UID
+  isVerified    Boolean      @default(false) @map("is_verified")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  // Relations
+  ownedGyms     Gym[]         @relation("GymOwner")
+  memberships   Membership[]
+  sessionPasses SessionPass[]
+  accessCodes   AccessCode[]
+  checkIns      CheckIn[]
+  payments      Payment[]
+  productSales  ProductSale[]
+  gymStaff      GymStaff[]
+  magicLinks    MagicLink[]
+
+  @@index([phone])
+  @@index([email])
+  @@index([firebaseUid])
+  @@map("users")
+}
+
+// ========================================
+// MAGIC LINKS (Authentification sans code)
+// ========================================
+
+model MagicLink {
+  id        String   @id @default(uuid())
+  token     String   @unique // Token unique pour le lien
+  phone     String   // Numéro destinataire
+  userId    String?  @map("user_id") // Null si premier login
+  used      Boolean  @default(false)
+  expiresAt DateTime @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([token])
+  @@index([phone])
+  @@index([expiresAt])
+  @@map("magic_links")
+}
+
+// ========================================
+// TABLES SALLES & GÉOLOCALISATION
+// ========================================
+
+model Gym {
+  id          String    @id @default(uuid())
+  name        String
+  address     String
+  city        String
+  latitude    Decimal   @db.Decimal(10, 8)
+  longitude   Decimal   @db.Decimal(11, 8)
+  ownerId     String    @map("owner_id")
+  exitQrCode  String    @unique @map("exit_qr_code") // QR fixe pour sortie
+  isActive    Boolean   @default(true) @map("is_active")
+  deletedAt   DateTime? @map("deleted_at") // Soft delete
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  owner         User          @relation("GymOwner", fields: [ownerId], references: [id])
+  memberships   Membership[]
+  sessionPasses SessionPass[]
+  checkIns      CheckIn[]
+  payments      Payment[]
+  products      Product[]
+  productSales  ProductSale[]
+  gymStaff      GymStaff[]
+
+  @@index([latitude, longitude]) // Geo queries
+  @@index([ownerId])
+  @@map("gyms")
+}
+
+// ========================================
+// TABLE STAFF (Many-to-Many)
+// ========================================
+
+model GymStaff {
+  id          String   @id @default(uuid())
+  gymId       String   @map("gym_id")
+  userId      String   @map("user_id")
+  permissions Json     @default("{}") // Ex: {can_scan: true, can_sell: true}
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  // Relations
+  gym  Gym  @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([gymId, userId]) // Un staff ne peut être ajouté qu'une fois par salle
+  @@index([userId])
+  @@map("gym_staff")
+}
+
+// ========================================
+// GESTION DES ACCÈS (ABONNEMENTS & PASS)
+// ========================================
+
+model Membership {
+  id                String           @id @default(uuid())
+  userId            String           @map("user_id")
+  gymId             String           @map("gym_id")
+  type              MembershipType
+  startDate         DateTime         @map("start_date") @db.Date
+  endDate           DateTime         @map("end_date") @db.Date
+  status            MembershipStatus @default(active)
+  remainingSessions Int?             @map("remaining_sessions") // Pour carnets de X séances
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+
+  // Relations
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gym         Gym          @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  accessCodes AccessCode[]
+
+  @@index([userId, status])
+  @@index([gymId, status])
+  @@index([endDate]) // Alertes expirations
+  @@map("memberships")
+}
+
+model SessionPass {
+  id           String    @id @default(uuid())
+  userId       String?   @map("user_id") // Null si client anonyme
+  gymId        String    @map("gym_id")
+  validityType String    @map("validity_type") // "1h", "2h", "4h", "half_day"
+  expiresAt    DateTime  @map("expires_at")
+  used         Boolean   @default(false)
+  usedAt       DateTime? @map("used_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  // Relations
+  user        User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  gym         Gym          @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  accessCodes AccessCode[]
+
+  @@index([gymId, expiresAt])
+  @@index([userId])
+  @@map("session_passes")
+}
+
+// ========================================
+// QR CODES (LE CŒUR DU SYSTÈME)
+// ========================================
+
+model AccessCode {
+  id              String    @id @default(uuid())
+  codeValue       String    @unique @map("code_value") // Le QR code lui-même (hash)
+  userId          String?   @map("user_id")
+  membershipId    String?   @map("membership_id")
+  sessionPassId   String?   @map("session_pass_id")
+  shareToken      String    @unique @map("share_token") // Token pour lien WhatsApp (ex: ABC123)
+  lastRefreshedAt DateTime  @default(now()) @map("last_refreshed_at")
+  expiresAt       DateTime  @map("expires_at") // Expiration du pass/membership
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  // Relations
+  user        User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  membership  Membership?  @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  sessionPass SessionPass? @relation(fields: [sessionPassId], references: [id], onDelete: Cascade)
+  checkIns    CheckIn[]
+
+  @@index([codeValue]) // Ultra-fast lookup
+  @@index([shareToken])
+  @@index([expiresAt])
+  @@index([userId])
+  @@map("access_codes")
+}
+
+// ========================================
+// TRAÇABILITÉ (CHECK-INS)
+// ========================================
+
+model CheckIn {
+  id                 String      @id @default(uuid())
+  gymId              String      @map("gym_id")
+  userId             String?     @map("user_id")
+  accessCodeId       String      @map("access_code_id")
+  validatedByStaffId String?     @map("validated_by_staff_id") // Null si exit auto
+  type               CheckInType // entry ou exit
+  scannedAt          DateTime    @default(now()) @map("scanned_at")
+
+  // Relations
+  gym              Gym        @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  user             User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+  accessCode       AccessCode @relation(fields: [accessCodeId], references: [id], onDelete: Cascade)
+  validatedByStaff User?      @relation(fields: [validatedByStaffId], references: [id], onDelete: SetNull, map: "check_ins_staff_fkey")
+
+  @@index([gymId, scannedAt]) // Dashboard live + rapports
+  @@index([userId, scannedAt])
+  @@index([accessCodeId])
+  @@map("check_ins")
+}
+
+// ========================================
+// BOUTIQUE (POST-MVP)
+// ========================================
+
+model Product {
+  id            String   @id @default(uuid())
+  gymId         String   @map("gym_id")
+  name          String
+  price         Decimal  @db.Decimal(10, 2)
+  stockQuantity Int      @default(0) @map("stock_quantity")
+  photoUrl      String?  @map("photo_url")
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  gym   Gym           @relation(fields: [gymId], references: [id], onDelete: Cascade)
+  sales ProductSale[]
+
+  @@index([gymId])
+  @@map("products")
+}
+
+model ProductSale {
+  id            String        @id @default(uuid())
+  productId     String        @map("product_id")
+  userId        String?       @map("user_id")
+  gymId         String        @map("gym_id")
+  quantity      Int
+  totalPrice    Decimal       @map("total_price") @db.Decimal(10, 2)
+  paymentMethod PaymentMethod @map("payment_method")
+  createdAt     DateTime      @default(now()) @map("created_at")
+
+  // Relations
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  gym     Gym     @relation(fields: [gymId], references: [id], onDelete: Cascade)
+
+  @@index([gymId, createdAt])
+  @@index([productId])
+  @@map("product_sales")
+}
+
+// ========================================
+// PAIEMENTS & WEBHOOKS
+// ========================================
+
+model Payment {
+  id             String        @id @default(uuid())
+  userId         String?       @map("user_id")
+  gymId          String        @map("gym_id")
+  paymentType    PaymentType   @map("payment_type")
+  referenceId    String        @map("reference_id") // ID membership/session_pass/product_sale
+  amount         Decimal       @db.Decimal(10, 2)
+  method         PaymentMethod
+  providerTxId   String?       @unique @map("provider_tx_id") // Transaction ID Wave/OM
+  status         PaymentStatus @default(pending)
+  webhookPayload Json?         @map("webhook_payload") // Raw data du webhook
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  // Relations
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  gym  Gym   @relation(fields: [gymId], references: [id], onDelete: Cascade)
+
+  @@index([gymId, createdAt])
+  @@index([userId])
+  @@index([providerTxId])
+  @@index([status])
+  @@map("payments")
+}
