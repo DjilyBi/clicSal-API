@@ -6,6 +6,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { GymsModule } from './gyms/gyms.module';
+import { AccessCodesModule } from './access-codes/access-codes.module';
 import { MembershipsModule } from './memberships/memberships.module';
 import { CheckInsModule } from './check-ins/check-ins.module';
 import { PaymentsModule } from './payments/payments.module';
@@ -36,6 +37,7 @@ import { WebsocketModule } from './websocket/websocket.module';
     AuthModule,
     UsersModule,
     GymsModule,
+    AccessCodesModule,
     MembershipsModule,
     CheckInsModule,
     PaymentsModule,
