@@ -43,3 +43,5 @@ Thumbs.db
 .cache/
 tmp/
 temp/
+# Fichier .env local - ne pas committer
+.env
