@@ -97,6 +97,7 @@ model User {
   productSales  ProductSale[]
   gymStaff      GymStaff[]
   magicLinks    MagicLink[]
+  sessions      UserSession[]
 
   @@index([phone])
   @@index([email])
@@ -125,6 +126,28 @@ model MagicLink {
   @@index([phone])
   @@index([expiresAt])
   @@map("magic_links")
+}
+
+// ========================================
+// SESSION MANAGEMENT (Multi-device lock)
+// ========================================
+
+model UserSession {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  deviceId  String    @map("device_id") // Hash du device (User-Agent + IP)
+  token     String    @unique // JWT token
+  expiresAt DateTime  @map("expires_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, deviceId]) // Un device par user à la fois
+  @@index([token])
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("user_sessions")
 }
 
 // ========================================
@@ -346,8 +369,10 @@ model Payment {
   gym  Gym   @relation(fields: [gymId], references: [id], onDelete: Cascade)
 
   @@index([gymId, createdAt])
+  @@index([gymId, status])
   @@index([userId])
   @@index([providerTxId])
   @@index([status])
+  @@index([paymentType])
   @@map("payments")
 }

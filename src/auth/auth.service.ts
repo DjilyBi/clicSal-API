@@ -1,6 +1,7 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
+import { SessionService } from './session.service';
 import { nanoid } from 'nanoid';
 
 @Injectable()
@@ -8,6 +9,7 @@ export class AuthService {
   constructor(
     private prisma: PrismaService,
     private jwtService: JwtService,
+    private sessionService: SessionService,
   ) {}
 
   // Générer et envoyer Magic Link
@@ -37,7 +39,11 @@ export class AuthService {
   }
 
   // Vérifier Magic Link et authentifier
-  async verifyMagicLink(token: string) {
+  async verifyMagicLink(
+    token: string,
+    deviceId: string = 'web-default',
+    userAgent: string = 'unknown',
+  ) {
     const magicLink = await this.prisma.magicLink.findUnique({
       where: { token },
     });
@@ -66,9 +72,12 @@ export class AuthService {
       });
     }
 
-    // Générer JWT
-    const payload = { sub: user.id, phone: user.phone, role: user.role };
-    const accessToken = this.jwtService.sign(payload);
+    // Créer une session (invalide les anciens devices)
+    const accessToken = await this.sessionService.createSession(
+      user.id,
+      deviceId,
+      userAgent,
+    );
 
     return {
       accessToken,
