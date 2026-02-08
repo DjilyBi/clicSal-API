@@ -62,11 +62,7 @@ enum CheckInType {
 }
 
 enum AuthProvider {
-  firebase_phone
-  google
-  apple
-  email
-  magic_link
+  supabase // Tout géré par Supabase Auth (Google, Apple, Magic Link, etc.)
 }
 
 // ========================================
@@ -75,14 +71,14 @@ enum AuthProvider {
 
 model User {
   id            String       @id @default(uuid())
+  supabaseId    String       @unique @map("supabase_id") // Référence auth.users de Supabase
   firstName     String?      @map("first_name")
   lastName      String?      @map("last_name")
   email         String?      @unique
-  phone         String       @unique // Format: +221771234567
+  phone         String?      @unique // Format: +221771234567
   photoUrl      String?      @map("photo_url")
   role          UserRole     @default(member)
-  authProvider  AuthProvider @default(magic_link) @map("auth_provider")
-  firebaseUid   String?      @unique @map("firebase_uid") // Firebase Auth UID
+  authProvider  AuthProvider @default(supabase) @map("auth_provider")
   isVerified    Boolean      @default(false) @map("is_verified")
   createdAt     DateTime     @default(now()) @map("created_at")
   updatedAt     DateTime     @updatedAt @map("updated_at")
@@ -96,36 +92,12 @@ model User {
   payments      Payment[]
   productSales  ProductSale[]
   gymStaff      GymStaff[]
-  magicLinks    MagicLink[]
   sessions      UserSession[]
 
   @@index([phone])
   @@index([email])
-  @@index([firebaseUid])
+  @@index([supabaseId])
   @@map("users")
-}
-
-// ========================================
-// MAGIC LINKS (Authentification sans code)
-// ========================================
-
-model MagicLink {
-  id        String   @id @default(uuid())
-  token     String   @unique // Token unique pour le lien
-  phone     String   // Numéro destinataire
-  userId    String?  @map("user_id") // Null si premier login
-  used      Boolean  @default(false)
-  expiresAt DateTime @map("expires_at")
-  usedAt    DateTime? @map("used_at")
-  createdAt DateTime @default(now()) @map("created_at")
-
-  // Relations
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
-
-  @@index([token])
-  @@index([phone])
-  @@index([expiresAt])
-  @@map("magic_links")
 }
 
 // ========================================
